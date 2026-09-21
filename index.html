@@ -108,7 +108,7 @@ body{background:linear-gradient(180deg,#ffffff 0%,#f5f5f5 100%);color:var(--abc-
   <button data-view="assets">▦ <span>Asset Library</span></button>
   <button data-view="settings">⚙ <span>Event Setup</span></button>
  </div>
- <div class="sidefoot"><strong>Live working file</strong><br>Changes save automatically in this browser. Daily and team timelines stay synced with the Master Tracker.</div>
+ <div class="sidefoot"><strong>Live working file</strong><br>Changes save automatically on this browser first, then sync to the shared team workspace when online. Use Save & Backup for a manual checkpoint.</div>
 </aside>
 <main class="main">
  <header class="topbar"><div><h2 id="pageTitle">Dashboard</h2><p id="pageSub">Everything for the conference, in one place.</p></div><div class="actions save-cluster"><span class="team-user"><span class="cloud-dot"></span>ABC Shared Workspace</span><span id="saveState" class="save-state saved">Connecting…</span><button class="btn primary" id="manualSaveBtn">Save & Backup</button><button class="btn" id="exportBtn">Export Backup</button><label class="btn" for="importInput">Import Backup</label><input id="importInput" type="file" accept="application/json" hidden><button class="btn dark" id="quickTask">+ Task</button></div></header>
@@ -158,19 +158,19 @@ const defaultData={
  speakers:[], moderators:[], sessions:[], melaninVendors:[], contacts:[], runOfShow:[],
  ticketSales:[], ticketSettings:{salesGoal:'',revenueGoal:'',registrationLink:'https://bit.ly/eiac2026themovementcontinues',notes:'Virtuous Raise registration page'}, cloudConfig:{sharedEndpoint:'__SUPABASE_SHARED__',virtuousSyncEndpoint:'',workspaceKey:'eiac-2026',allowedUsers:['Shevelle','Chrissy','Allyyah'],lastSharedSave:'',lastSharedPull:'',lastVirtuousSync:'',lastSaveType:''}, scripts:[], assets:[]
 };
-const SHARED_API = location.origin + location.pathname + '?api=1';
+const SHARED_API = 'https://cfahmakfvpjgtatllnye.supabase.co/functions/v1/eiac-command-center?api=1';
 const TEAM_ACCESS_CODE = ''; // Access code removed
 let lastSeenSharedVersion = 0;
 let sharedPollTimer = null;
 let sharedReady = false;
 let data=load();
-function normalizePlan(d){d.tasks=(d.tasks||[]).map(t=>{if(!t.due&&TIMELINE_PLAN[t.id])t.due=TIMELINE_PLAN[t.id];return t});return d}
+function normalizePlan(d){d.tasks=(d.tasks||[]).map(t=>{if(!t.due&&TIMELINE_PLAN[t.id])t.due=TIMELINE_PLAN[t.id];return t});d._syncMeta=Object.assign({lastLocalModified:0,lastCloudVersion:0,lastCloudUpdatedAt:0},d._syncMeta||{});return d}
 function load(){try{const x=JSON.parse(localStorage.getItem(STORE));if(!x)return normalizePlan(structuredClone(defaultData));const d=Object.assign(structuredClone(defaultData),x);d.ticketSales=d.ticketSales||[];d.ticketSettings=Object.assign({},defaultData.ticketSettings,d.ticketSettings||{});d.cloudConfig=Object.assign({},defaultData.cloudConfig,d.cloudConfig||{});d.cloudConfig.allowedUsers=d.cloudConfig.allowedUsers||['Shevelle','Chrissy','Allyyah'];d.scripts=d.scripts||[];d.assets=d.assets||[];d.melaninVendors=d.melaninVendors||[];return normalizePlan(d)}catch(e){return normalizePlan(structuredClone(defaultData))}}
 function markSaveState(text,state='saved'){const el=document.getElementById('saveState');if(!el)return;el.textContent=text;el.className='save-state '+state}
 let sharedAutosaveTimer=null;
 let sharedAutosaveInFlight=false;
 let sharedAutosaveQueued=false;
-function persistLocal(){localStorage.setItem(STORE,JSON.stringify(data));}
+function persistLocal(touch=true){if(touch){data._syncMeta=data._syncMeta||{};data._syncMeta.lastLocalModified=Date.now()}localStorage.setItem(STORE,JSON.stringify(data));}
 function scheduleSharedAutosave(delay=900){
  if(!sharedReady)return;
  clearTimeout(sharedAutosaveTimer);
@@ -181,7 +181,7 @@ function save(opts={}){
  const {render=true, autosave=true}=opts;
  try{
   persistLocal();
-  markSaveState(sharedReady?'Saved locally · syncing…':'Saved locally','saved');
+  markSaveState(sharedReady?'Saved on this browser · syncing…':'Saved on this browser · cloud unavailable','saved');
   if(render)renderCurrent();
   if(autosave)scheduleSharedAutosave();
  }catch(e){markSaveState('Save failed','error');console.error(e)}
@@ -192,7 +192,7 @@ async function manualSave(){
  let sharedOk=true;
  if(sharedReady)sharedOk=await saveSharedWorkspace(false,false);
  exportBackup();
- markSaveState(sharedOk?'Saved + backup downloaded':'Local backup saved · shared save failed',sharedOk?'shared':'error');
+ markSaveState(sharedOk?'Saved to browser + team · backup downloaded':'Saved on this browser · backup downloaded · team sync unavailable',sharedOk?'shared':'saved');
 }
 
 const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -288,7 +288,7 @@ async function saveSharedWorkspace(showAlert=true,isAuto=false){
  try{
   const out=await sharedFetch('PUT',{workspace:'eiac-2026',data,saveType:isAuto?'auto':'manual'});
   lastSeenSharedVersion=Number(out.version||lastSeenSharedVersion||0);
-  data.cloudConfig.lastSharedSave=new Date().toLocaleString();data.cloudConfig.lastSaveType=isAuto?'Automatic':'Manual';persistLocal();
+  data.cloudConfig.lastSharedSave=new Date().toLocaleString();data.cloudConfig.lastSaveType=isAuto?'Automatic':'Manual';data._syncMeta=data._syncMeta||{};data._syncMeta.lastCloudVersion=lastSeenSharedVersion;data._syncMeta.lastCloudUpdatedAt=Date.now();persistLocal(false);
   markSaveState(isAuto?'Autosaved for team':'Saved to shared workspace','shared');
   if(showAlert)alert('Shared workspace saved for Allyyah, Chrissy and Shevelle.');return true;
  }catch(e){console.error(e);markSaveState(isAuto?'Autosave failed':'Shared save failed','error');if(showAlert)alert('Shared save failed: '+e.message);return false}
@@ -296,12 +296,25 @@ async function saveSharedWorkspace(showAlert=true,isAuto=false){
 }
 async function pullSharedWorkspace(showAlert=true){
  if(!sharedReady){if(showAlert)alert('Shared workspace is still connecting. Please try again in a moment.');return false}
- try{markSaveState('Loading team workspace…','shared');const out=await sharedFetch('GET');const incoming=out.data;
+ try{
+  markSaveState('Checking team workspace…','shared');
+  const out=await sharedFetch('GET'), incoming=out.data, cloudUpdated=Date.parse(out.updated_at||'')||0, localUpdated=Number(data?._syncMeta?.lastLocalModified||0);
   lastSeenSharedVersion=Number(out.version||0);
-  if(incoming&&incoming.tasks){data=Object.assign(structuredClone(defaultData),incoming);data.cloudConfig=Object.assign({},defaultData.cloudConfig,incoming.cloudConfig||{}, {sharedEndpoint:'__SUPABASE_SHARED__',workspaceKey:'eiac-2026',allowedUsers:['Shevelle','Chrissy','Allyyah'],lastSharedPull:new Date().toLocaleString()});persistLocal();renderCurrent();markSaveState('Team workspace loaded','shared');}
-  else {await saveSharedWorkspace(false,false);markSaveState('Shared workspace initialized','shared')}
-  if(showAlert)alert('Latest team workspace loaded.');return true;
- }catch(e){console.error(e);markSaveState('Shared pull failed','error');if(showAlert)alert('Shared pull failed: '+e.message);return false}
+  if(incoming&&incoming.tasks){
+   if(localUpdated>cloudUpdated && localUpdated>0){
+    markSaveState('Browser copy is newer · syncing to team','shared');
+    await saveSharedWorkspace(false,true);
+   }else{
+    data=Object.assign(structuredClone(defaultData),incoming);
+    data.cloudConfig=Object.assign({},defaultData.cloudConfig,incoming.cloudConfig||{}, {sharedEndpoint:'__SUPABASE_SHARED__',workspaceKey:'eiac-2026',allowedUsers:['Shevelle','Chrissy','Allyyah'],lastSharedPull:new Date().toLocaleString()});
+    data._syncMeta=Object.assign({lastLocalModified:cloudUpdated,lastCloudVersion:lastSeenSharedVersion,lastCloudUpdatedAt:cloudUpdated},incoming._syncMeta||{});
+    persistLocal(false);renderCurrent();markSaveState('Team workspace loaded','shared');
+   }
+  }else{
+   await saveSharedWorkspace(false,false);markSaveState('Shared workspace initialized','shared')
+  }
+  if(showAlert)alert('Latest team workspace checked.');return true;
+ }catch(e){console.error(e);markSaveState('Saved on this browser · cloud unavailable','saved');if(showAlert)alert('Team sync is unavailable right now, but this browser copy is still saved.');return false}
 }
 async function testSharedConnection(){try{await sharedFetch('GET');alert('Shared workspace connection is working.')}catch(e){alert('Connection test failed: '+e.message)}}
 function saveIntegrationSettings(){data.cloudConfig=Object.assign({},data.cloudConfig,{sharedEndpoint:'__SUPABASE_SHARED__',virtuousSyncEndpoint:val('cfg_virt'),workspaceKey:'eiac-2026',allowedUsers:['Shevelle','Chrissy','Allyyah']});save()}
@@ -381,11 +394,15 @@ document.getElementById('importInput').onchange=e=>{const f=e.target.files[0];if
 function resetData(){if(confirm('Reset all tracker changes back to the original checklist? Export a backup first if you need your current entries.')){data=structuredClone(defaultData);save()}}
 async function initializeSharedWorkspace(){
  try{
+  localStorage.setItem(STORE+'_test','ok');localStorage.removeItem(STORE+'_test');
+  if(!localStorage.getItem(STORE))persistLocal(false);
+ }catch(e){markSaveState('Browser storage blocked','error');console.error(e);return}
+ try{
   await sharedFetch('GET');sharedReady=true;
   await pullSharedWorkspace(false);startSharedPolling();
- }catch(e){sharedReady=false;markSaveState('Offline · retrying','error');console.error(e);setTimeout(initializeSharedWorkspace,3000)}
+ }catch(e){sharedReady=false;markSaveState('Saved on this browser · cloud unavailable','saved');console.error(e);setTimeout(initializeSharedWorkspace,10000)}
 }
-function startSharedPolling(){clearInterval(sharedPollTimer);sharedPollTimer=setInterval(async()=>{if(!sharedReady||sharedAutosaveInFlight)return;try{const out=await sharedFetch('GET');const v=Number(out.version||0);if(v>lastSeenSharedVersion&&out.data&&out.data.tasks){lastSeenSharedVersion=v;data=Object.assign(structuredClone(defaultData),out.data);data.cloudConfig=Object.assign({},defaultData.cloudConfig,out.data.cloudConfig||{}, {sharedEndpoint:'__SUPABASE_SHARED__'});persistLocal();renderCurrent();markSaveState('Updated from team','shared')}}catch(e){markSaveState('Offline · retrying','error')}},4000)}
+function startSharedPolling(){clearInterval(sharedPollTimer);sharedPollTimer=setInterval(async()=>{if(!sharedReady||sharedAutosaveInFlight)return;try{const out=await sharedFetch('GET');const v=Number(out.version||0),cloudUpdated=Date.parse(out.updated_at||'')||0,localUpdated=Number(data?._syncMeta?.lastLocalModified||0);if(v>lastSeenSharedVersion&&out.data&&out.data.tasks){if(localUpdated>cloudUpdated&&localUpdated>0){await saveSharedWorkspace(false,true)}else{lastSeenSharedVersion=v;data=Object.assign(structuredClone(defaultData),out.data);data.cloudConfig=Object.assign({},defaultData.cloudConfig,out.data.cloudConfig||{}, {sharedEndpoint:'__SUPABASE_SHARED__'});data._syncMeta=Object.assign({lastLocalModified:cloudUpdated,lastCloudVersion:v,lastCloudUpdatedAt:cloudUpdated},out.data._syncMeta||{});persistLocal(false);renderCurrent();markSaveState('Updated from team','shared')}}}catch(e){sharedReady=false;markSaveState('Saved on this browser · cloud unavailable','saved')}},5000)}
 renderDashboard();setTimeout(initializeSharedWorkspace,100);
 </script>
 </body></html>
